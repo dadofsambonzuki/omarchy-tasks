@@ -45,7 +45,19 @@ done
 command -v task >/dev/null || echo "Note: Taskwarrior (task) is not installed; the plugin will say so until it is. It is the task package in your distribution."
 
 sha() { sha256sum -- "$1" | cut -d' ' -f1; }
-recorded_sha() { [[ -f "$RECORD" ]] && awk -F'\t' -v p="$DEST" '$2 == p { print $1 }' "$RECORD" | tail -1 || true; }
+recorded_sha() { [[ -f "$RECORD" && ! -L "$RECORD" ]] && awk -F'\t' -v p="$DEST" '$2 == p { print $1 }' "$RECORD" | tail -1 || true; }
+
+# ── The state folder and record are only ever plain directories and
+#    files of ours. A link at any of these paths is refused, never followed,
+#    and every new file is created exclusively with mktemp.
+for p in "$STATEDIR" "$BACKUPDIR"; do
+  if [[ -L "$p" || (-e "$p" && ! -d "$p") ]]; then
+    echo "Refusing to use $p: it is a link or not a directory." >&2; exit 1
+  fi
+done
+if [[ -L "$RECORD" || (-e "$RECORD" && ! -f "$RECORD") ]]; then
+  echo "Refusing to use $RECORD: it is a link or not a regular file." >&2; exit 1
+fi
 
 # ── Is the destination ours? Decided from bytes and the record, never by
 #    running what is there.
@@ -55,8 +67,10 @@ case "$(if [[ -L $DEST ]]; then echo link; elif [[ ! -e $DEST ]]; then echo miss
     if [[ "$(sha "$DEST")" != "$(recorded_sha)" ]]; then
       if (( REPLACE )); then
         mkdir -p "$BACKUPDIR"
-        backup="$BACKUPDIR/$HELPER.$(date +%Y%m%d-%H%M%S)"
-        mv -- "$DEST" "$backup"
+        # mktemp creates the name exclusively, so two backups never collide
+        # and a pre-existing file or link can't be written through.
+        backup="$(mktemp -- "$BACKUPDIR/$HELPER.$(date +%Y%m%d-%H%M%S).XXXXXX")"
+        mv -f -- "$DEST" "$backup"
         echo "Moved the existing $DEST (not written by this plugin) to $backup"
       else
         echo "Refusing to overwrite $DEST: this plugin has no record of writing it." >&2
@@ -86,9 +100,11 @@ BIN="${CARGO_TARGET_DIR:-$REPO/target}/release/$HELPER"
 
 mkdir -p "$BINDIR" "$STATEDIR"
 install -m755 -- "$BIN" "$DEST"
-# The record: one "<sha256>\t<path>" line per file this plugin wrote.
-{ [[ -f "$RECORD" ]] && awk -F'\t' -v p="$DEST" '$2 != p' "$RECORD" || true; printf '%s\t%s\n' "$(sha "$DEST")" "$DEST"; } > "$RECORD.tmp"
-mv -- "$RECORD.tmp" "$RECORD"
+# The record: one "<sha256>\t<path>" line per file this plugin wrote,
+# assembled in an exclusively created temp file and renamed into place.
+tmp="$(mktemp -- "$STATEDIR/installed.tsv.XXXXXX")"
+{ [[ -f "$RECORD" ]] && awk -F'\t' -v p="$DEST" '$2 != p' "$RECORD" || true; printf '%s\t%s\n' "$(sha "$DEST")" "$DEST"; } > "$tmp"
+mv -f -- "$tmp" "$RECORD"
 echo "Installed $DEST"
 
 if [[ ! -e "$PLUGIN_PATH" && ! -L "$PLUGIN_PATH" ]]; then

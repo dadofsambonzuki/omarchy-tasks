@@ -17,7 +17,11 @@ RECORD="$STATEDIR/installed.tsv"
 omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
 
 recorded=""
-[[ -f "$RECORD" ]] && recorded="$(awk -F'\t' -v p="$DEST" '$2 == p { print $1 }' "$RECORD" | tail -1)"
+if [[ -L "$STATEDIR" || -L "$RECORD" ]]; then
+  echo "Left the install record alone: $STATEDIR or $RECORD is a link, which this plugin never writes." >&2
+elif [[ -f "$RECORD" ]]; then
+  recorded="$(awk -F'\t' -v p="$DEST" '$2 == p { print $1 }' "$RECORD" | tail -1)"
+fi
 if [[ -L "$DEST" ]]; then
   echo "Left $DEST alone: it is a link, which this plugin never writes."
 elif [[ -f "$DEST" ]]; then
@@ -27,9 +31,10 @@ elif [[ -f "$DEST" ]]; then
     echo "Left $DEST alone: it is not the file this plugin installed (no matching record)."
   fi
 fi
-if [[ -f "$RECORD" ]]; then
-  awk -F'\t' -v p="$DEST" '$2 != p' "$RECORD" > "$RECORD.tmp" || true
-  if [[ -s "$RECORD.tmp" ]]; then mv -- "$RECORD.tmp" "$RECORD"; else rm -f -- "$RECORD.tmp" "$RECORD"; fi
+if [[ -f "$RECORD" && ! -L "$RECORD" && ! -L "$STATEDIR" ]]; then
+  tmp="$(mktemp -- "$STATEDIR/installed.tsv.XXXXXX")"
+  awk -F'\t' -v p="$DEST" '$2 != p' "$RECORD" > "$tmp" || true
+  if [[ -s "$tmp" ]]; then mv -f -- "$tmp" "$RECORD"; else rm -f -- "$tmp" "$RECORD"; fi
 fi
 
 if [[ -L "$PLUGIN_PATH" ]]; then
