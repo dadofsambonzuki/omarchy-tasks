@@ -101,6 +101,6 @@ omarchy plugin remove derekross.tasks    # if added with omarchy plugin add
 
 ```bash
 cargo test                # the helper
-node --test tests/        # Model.js
+node --test tests/*.test.js   # Model.js
 ./dist/install.sh         # rebuild and reinstall; QML reloads on save
 ```
