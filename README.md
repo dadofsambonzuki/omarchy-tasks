@@ -50,7 +50,7 @@ omarchy bar move derekross.tasks --section right
 
 From a checkout somewhere else, run `./dist/install.sh` inside it; that links the checkout into `~/.config/omarchy/plugins/` so edits reload live.
 
-`install.sh` builds `omarchy-taskbridge` with cargo (`--locked`, so the reviewed `Cargo.lock` is what gets built) and puts it in `~/.local/bin`. It writes nothing else. No sudo or pkexec is required, and nothing is downloaded beyond the crates cargo fetches to build the helper.
+`install.sh` builds `omarchy-taskbridge` with cargo (`--locked`, so the reviewed `Cargo.lock` is what gets built) and puts it in `~/.local/bin`, recording its SHA-256 in `~/.local/state/omarchy-tasks/installed.tsv`. If something else already sits at that path, the script refuses and says so; `--replace-existing` moves that file to a backup under the same state folder instead. It writes nothing else. No sudo or pkexec is required, and nothing is downloaded beyond the crates cargo fetches to build the helper.
 
 ## Settings
 
@@ -81,6 +81,8 @@ omarchy plugin update derekross.tasks
 ~/.config/omarchy/plugins/derekross.tasks/dist/uninstall.sh
 omarchy plugin remove derekross.tasks    # if added with omarchy plugin add
 ```
+
+`uninstall.sh` deletes the helper only if it is a regular file whose SHA-256 matches the install record, and the plugin link only if it points at this checkout. It never runs the file to find out what it is. Anything else at those paths is left in place and named in the output.
 
 ## Privacy and security
 

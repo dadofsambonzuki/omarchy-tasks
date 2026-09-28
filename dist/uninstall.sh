@@ -1,24 +1,35 @@
 #!/usr/bin/env bash
 # Remove Tasks: the omarchy-taskbridge helper and the plugin link. Only
-# what this plugin put there is removed: the helper is checked to be ours
-# before deletion, and the link only if it points at this checkout. Your
-# Taskwarrior data is untouched.
+# what this plugin wrote is removed. The helper is deleted only if it is a
+# regular file whose SHA-256 matches the install record; nothing at that
+# path is ever executed to decide. The link is removed only if it points
+# at this checkout. Your Taskwarrior data is untouched.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO="$(pwd -P)"
 PLUGIN_ID="derekross.tasks"
-HELPER="$HOME/.local/bin/omarchy-taskbridge"
+DEST="$HOME/.local/bin/omarchy-taskbridge"
 PLUGIN_PATH="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
+STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-tasks"
+RECORD="$STATEDIR/installed.tsv"
 
 omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
 
-if [[ -f "$HELPER" && ! -L "$HELPER" ]]; then
-  if "$HELPER" version 2>/dev/null | grep -q '"taskbridge"'; then
-    rm -f -- "$HELPER" && echo "Removed $HELPER"
+recorded=""
+[[ -f "$RECORD" ]] && recorded="$(awk -F'\t' -v p="$DEST" '$2 == p { print $1 }' "$RECORD" | tail -1)"
+if [[ -L "$DEST" ]]; then
+  echo "Left $DEST alone: it is a link, which this plugin never writes."
+elif [[ -f "$DEST" ]]; then
+  if [[ -n "$recorded" && "$(sha256sum -- "$DEST" | cut -d' ' -f1)" == "$recorded" ]]; then
+    rm -f -- "$DEST" && echo "Removed $DEST"
   else
-    echo "Left $HELPER alone: it doesn't answer as this plugin's helper."
+    echo "Left $DEST alone: it is not the file this plugin installed (no matching record)."
   fi
+fi
+if [[ -f "$RECORD" ]]; then
+  awk -F'\t' -v p="$DEST" '$2 != p' "$RECORD" > "$RECORD.tmp" || true
+  if [[ -s "$RECORD.tmp" ]]; then mv -- "$RECORD.tmp" "$RECORD"; else rm -f -- "$RECORD.tmp" "$RECORD"; fi
 fi
 
 if [[ -L "$PLUGIN_PATH" ]]; then
