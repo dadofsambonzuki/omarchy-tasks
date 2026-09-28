@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "id": "derekross.tasks",
+  "name": "Tasks",
+  "version": "0.1.0",
+  "author": "Derek Ross",
+  "license": "MIT",
+  "description": "Your Taskwarrior tasks in the Omarchy bar: a count of what's due, and a panel to add, finish, defer and sync tasks. Needs the taskbridge helper: run dist/install.sh.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Tasks",
+    "description": "Taskwarrior: due count on the bar, task list in the popup.",
+    "category": "Productivity",
+    "aliases": [
+      "taskwarrior",
+      "todo",
+      "tasks"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "countMode": "due",
+      "showWhenEmpty": true,
+      "defaultView": "due",
+      "includeWaiting": false,
+      "digestEnabled": true,
+      "digestTime": "09:00",
+      "digestDays": "mon,tue,wed,thu,fri",
+      "refreshSeconds": 30,
+      "syncMinutes": 15
+    },
+    "schema": [
+      {
+        "key": "countMode",
+        "type": "enum",
+        "label": "Number on the bar",
+        "description": "due = overdue plus due today.",
+        "options": ["due", "overdue", "pending"],
+        "defaultValue": "due"
+      },
+      {
+        "key": "showWhenEmpty",
+        "type": "boolean",
+        "label": "Show when nothing is due",
+        "defaultValue": true
+      },
+      {
+        "key": "defaultView",
+        "type": "enum",
+        "label": "Panel opens on",
+        "options": ["due", "today", "week", "all"],
+        "defaultValue": "due"
+      },
+      {
+        "key": "includeWaiting",
+        "type": "boolean",
+        "label": "List waiting tasks",
+        "description": "Tasks with a wait date are hidden until it passes, like task next.",
+        "defaultValue": false
+      },
+      {
+        "key": "digestEnabled",
+        "type": "boolean",
+        "label": "Daily digest",
+        "description": "One notification a day with what's overdue and due today. The gear in the panel sets the time and days.",
+        "defaultValue": true
+      },
+      {
+        "key": "digestTime",
+        "type": "string",
+        "label": "Digest time",
+        "description": "HH:mm, 24-hour.",
+        "defaultValue": "09:00"
+      },
+      {
+        "key": "digestDays",
+        "type": "string",
+        "label": "Digest days",
+        "description": "Comma-separated: mon,tue,wed,thu,fri,sat,sun.",
+        "defaultValue": "mon,tue,wed,thu,fri"
+      },
+      {
+        "key": "refreshSeconds",
+        "type": "integer",
+        "label": "Refresh every (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "syncMinutes",
+        "type": "integer",
+        "label": "Sync every (minutes)",
+        "description": "Runs task sync. 0 turns it off.",
+        "min": 0,
+        "max": 1440,
+        "step": 5,
+        "defaultValue": 15
+      }
+    ]
+  }
+}
