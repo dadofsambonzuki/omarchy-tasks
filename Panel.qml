@@ -512,9 +512,11 @@ Panel {
           }
 
           // ---- Filters. Whatever chips the helper was given, each with its
-          // own count; the gear edits them.
-          Row {
+          // own count; the gear edits them. A Flow, so a long set of chips
+          // wraps onto another line instead of running off the panel edge.
+          Flow {
             visible: !root.settingsOpen
+            width: parent.width
             spacing: Style.space(4)
 
             Repeater {
