@@ -234,20 +234,20 @@ Column {
             spacing: Style.space(2)
 
             PanelActionButton {
-              iconText: "󰁝"
+              iconText: "󰅃"                       // md-chevron_up
               enabled: card.index > 0
               opacity: enabled ? 1 : 0.4
-              tooltipText: "Move this chip left"
+              tooltipText: "Move this chip up"
               foreground: settings.foreground
               fontFamily: settings.fontFamily
               onClicked: settings.moveFilter(card.index, -1)
             }
 
             PanelActionButton {
-              iconText: "󰁜"
+              iconText: "󰅀"                       // md-chevron_down
               enabled: card.index < settings.filters.length - 1
               opacity: enabled ? 1 : 0.4
-              tooltipText: "Move this chip right"
+              tooltipText: "Move this chip down"
               foreground: settings.foreground
               fontFamily: settings.fontFamily
               onClicked: settings.moveFilter(card.index, 1)
