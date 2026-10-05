@@ -24,7 +24,8 @@ Column {
   signal closed()
 
   // The helper caps the list at one per digit key plus a few for h/l.
-  readonly property int maxFilters: 12
+  // Chips, line breaks and generated lines all count against this.
+  readonly property int maxFilters: 24
 
   readonly property bool anyPopupOpen: {
     for (var i = 0; i < editors.count; i++) {

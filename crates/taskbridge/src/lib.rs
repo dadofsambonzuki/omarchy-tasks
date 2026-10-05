@@ -337,9 +337,11 @@ pub fn filter_matches<Tz: TimeZone>(filter: &FilterOut, task: &TaskOut, now: &Da
     true
 }
 
-/// The most filters a settings file may define, one per digit key plus a
-/// few for the h/l cycle.
-pub const MAX_FILTERS: usize = 12;
+/// The most entries a settings file may define. Entries are chips, line
+/// breaks and generated lines together, and the budget is what twelve chips
+/// (one per digit key, plus the h/l cycle) would have needed before the
+/// structural entries existed.
+pub const MAX_FILTERS: usize = 24;
 const MAX_VALUES: usize = 32;
 const MAX_VALUE_LEN: usize = 80;
 const MAX_NAME_LEN: usize = 40;
@@ -1012,7 +1014,7 @@ mod tests {
         assert!(parse_filters("{}").is_empty());
         assert!(parse_filters("[]").is_empty());
         let many = format!("[{}]", vec![r#"{"name":"x"}"#; MAX_FILTERS + 5].join(","));
-        assert_eq!(parse_filters(&many).len(), MAX_FILTERS, "capped, one per digit key plus the cycle");
+        assert_eq!(parse_filters(&many).len(), MAX_FILTERS, "capped");
     }
 
     #[test]
