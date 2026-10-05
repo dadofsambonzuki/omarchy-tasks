@@ -140,6 +140,11 @@ pub struct FilterOut {
     pub match_mode: String,
     /// How `priority` matches: "exact" (default) or "atleast".
     pub priority_mode: String,
+    /// True for a line-break entry in the plugin's list: it holds its position
+    /// (so the indexes the tasks carry stay aligned with the array the plugin
+    /// sent) and matches nothing at all.
+    #[serde(rename = "break")]
+    pub is_break: bool,
     /// Tasks in the snapshot this filter matches.
     pub count: usize,
 }
@@ -280,6 +285,10 @@ fn priority_rank(priority: &str) -> u8 {
 /// project, so `projects` is always any-of; `tags` is any-of unless the
 /// filter asks for all of them.
 pub fn filter_matches<Tz: TimeZone>(filter: &FilterOut, task: &TaskOut, now: &DateTime<Tz>) -> bool {
+    if filter.is_break {
+        // Its window is `all`, so without this a break would match every task.
+        return false;
+    }
     if !in_window(task.due_ms, now, Window::parse(&filter.time)) {
         return false;
     }
@@ -339,6 +348,9 @@ struct FilterIn {
     match_mode: String,
     #[serde(default)]
     priority_mode: String,
+    /// `{"break": true}`: a line break in the list, not a chip.
+    #[serde(default, rename = "break")]
+    is_break: bool,
 }
 
 fn clamp_values(values: &[String]) -> Vec<String> {
@@ -368,6 +380,17 @@ fn clamp_name(name: &str, index: usize) -> String {
 }
 
 fn normalise_filter(input: &FilterIn, index: usize) -> FilterOut {
+    if input.is_break {
+        // No name, no window of its own, no projects or tags: a break must
+        // never be mistaken for a chip, and `filter_matches` refuses it.
+        return FilterOut {
+            is_break: true,
+            time: Window::All.as_str().to_string(),
+            match_mode: "any".to_string(),
+            priority_mode: "exact".to_string(),
+            ..FilterOut::default()
+        };
+    }
     let priority = match input.priority.trim().to_ascii_uppercase().as_str() {
         "H" => "H",
         "M" => "M",
@@ -387,6 +410,7 @@ fn normalise_filter(input: &FilterIn, index: usize) -> FilterOut {
             "exact"
         }
         .to_string(),
+        is_break: false,
         count: 0,
     }
 }
@@ -798,6 +822,7 @@ mod tests {
             priority: priority.into(),
             match_mode: "any".into(),
             priority_mode: "exact".into(),
+            is_break: false,
             count: 0,
         }
     }
@@ -958,5 +983,40 @@ mod tests {
         assert_eq!(names, vec!["Due", "Today", "Week", "Month", "Quarter", "All"]);
         assert_eq!(defaults.filters[3].time, "month");
         assert_eq!(defaults.filters[5].count, 3, "All counts everything listed");
+    }
+
+    #[test]
+    fn a_break_entry_holds_its_position_and_matches_nothing() {
+        let parsed = parse_filters(r#"[{"name":"Due","time":"due"},{"break":true},{"name":"All","time":"all"}]"#);
+        assert_eq!(parsed.len(), 3);
+        assert!(!parsed[0].is_break);
+        assert!(parsed[1].is_break, "the flag survives the round trip");
+        assert_eq!(parsed[1].name, "", "a break is not a chip");
+        assert!(!parsed[2].is_break, "the chip after a break is unaffected");
+
+        let raw = vec![
+            task("a", Some("20260927T040000Z"), "pending", Some("btcmap"), 12.0),
+            task("c", None, "pending", None, 1.0),
+        ];
+        let filters = vec![
+            filter("Due", "due", &[], &[], ""),
+            FilterOut {
+                is_break: true,
+                time: "all".to_string(),
+                match_mode: "any".to_string(),
+                priority_mode: "exact".to_string(),
+                ..FilterOut::default()
+            },
+            filter("All", "all", &[], &[], ""),
+        ];
+        let snap = build_snapshot_filtered(&raw, &now(), false, "3.5.0", &filters);
+
+        // A break's own window is `all`, so without the guard in
+        // filter_matches it would count every listed task and the chip after
+        // it would appear to match nothing.
+        assert_eq!(snap.filters[1].count, 0, "a break counts nothing");
+        assert!(snap.tasks.iter().all(|t| !t.filters.contains(&1)), "no task is in a break");
+        assert_eq!(snap.filters[2].count, 2, "the chip after the break still matches both");
+        assert!(snap.tasks.iter().all(|t| t.filters.contains(&2)));
     }
 }
