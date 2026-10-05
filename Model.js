@@ -47,14 +47,20 @@ function resolveFilterIndex(filters, wanted, fallback) {
   var want = String(wanted === undefined || wanted === null ? "" : wanted).trim().toLowerCase()
   if (want !== "") {
     for (var i = 0; i < list.length; i++) {
+      if (!isChip(list[i])) continue
       if (String(list[i].name === undefined ? "" : list[i].name).trim().toLowerCase() === want) return i
     }
     for (var j = 0; j < list.length; j++) {
+      if (!isChip(list[j])) continue
       if (filterTime(list[j]) === want) return j
     }
   }
   var at = parseInt(fallback, 10)
-  return isNaN(at) || at < 0 || at >= list.length ? 0 : at
+  if (isNaN(at) || at < 0 || at >= list.length || !isChip(list[at])) {
+    var chips = chipIndexes(list)
+    return chips.length > 0 ? chips[0] : 0
+  }
+  return at
 }
 
 function cycleIndex(length, current, delta) {
@@ -163,12 +169,25 @@ function isInFilter(task, index) {
   return false
 }
 
-function tasksForFilter(tasks, index, project) {
+function taskHasTag(task, tag) {
+  var tags = arrayFrom(task ? task.tags : null)
+  for (var i = 0; i < tags.length; i++) {
+    if (String(tags[i]) === tag) return true
+  }
+  return false
+}
+
+// The active chip, narrowed by a selected project and/or a selected tag -
+// each selection takes rows away, so they stack.
+function tasksForFilter(tasks, index, project, tag) {
   var out = []
   var list = tasks || []
+  var wantProject = project === "" || project === null || project === undefined ? "" : String(project)
+  var wantTag = tag === "" || tag === null || tag === undefined ? "" : String(tag)
   for (var i = 0; i < list.length; i++) {
     var t = list[i]
-    if (project !== "" && project !== null && project !== undefined && t.project !== project) continue
+    if (wantProject !== "" && t.project !== wantProject) continue
+    if (wantTag !== "" && !taskHasTag(t, wantTag)) continue
     if (!isInFilter(t, index)) continue
     out.push(t)
   }
@@ -238,6 +257,101 @@ function projectLabel(project) {
 // The matching itself happens in the helper, so a filter means the same
 // thing in the list, on the chip and in the number the pill shows.
 
+// ---- Entries: a chip, a line break, or a generated line.
+// A break and a facet both hold a position in the list - so the indexes the
+// helper puts on each task still line up with the list the plugin sent - and
+// neither is a chip you can select.
+
+function isDivider(entry) {
+  return !!(entry && entry.break === true)
+}
+
+// "projects", "tags", or "" when the entry is not a generated line.
+function facetKind(entry) {
+  var kind = String(entry && entry.facet !== undefined && entry.facet !== null ? entry.facet : "").trim().toLowerCase()
+  return kind === "projects" || kind === "tags" ? kind : ""
+}
+
+function isFacet(entry) {
+  return facetKind(entry) !== ""
+}
+
+// The chips a generated line shows: the projects or the tags in the list.
+// Both carry a name and a pending count, so the panel renders them the same.
+function facetItems(entry, projects, tags) {
+  var kind = facetKind(entry)
+  if (kind === "tags") return arrayFrom(tags)
+  if (kind === "projects") return arrayFrom(projects)
+  return []
+}
+
+// A chip: an entry with a window of its own.
+function isChip(entry) {
+  return !!entry && !isDivider(entry) && !isFacet(entry)
+}
+
+function dividerEntry() {
+  return { break: true }
+}
+
+function facetEntry(kind) {
+  var wanted = facetKind({ facet: kind })
+  return { facet: wanted === "" ? "projects" : wanted }
+}
+
+// The chips' positions, in order: what the number keys and the cycle use.
+function chipIndexes(filters) {
+  var list = arrayFrom(filters)
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    if (isChip(list[i])) out.push(i)
+  }
+  return out
+}
+
+// Every entry's position, grouped into lines: a break starts a new line, and
+// the panel renders each group as one Flow.
+function entryLines(entries) {
+  var list = arrayFrom(entries)
+  var out = []
+  var line = []
+  for (var i = 0; i < list.length; i++) {
+    if (isDivider(list[i])) {
+      if (line.length > 0) { out.push(line); line = [] }
+      continue
+    }
+    line.push(i)
+  }
+  if (line.length > 0) out.push(line)
+  return out
+}
+
+// The next chip in a direction, stepping over breaks and generated lines.
+function cycleChipIndex(filters, current, delta) {
+  var chips = chipIndexes(filters)
+  if (chips.length === 0) return 0
+  var at = chips.indexOf(Number(current))
+  if (at === -1) return chips[0]
+  return chips[((at + delta) % chips.length + chips.length) % chips.length]
+}
+
+// 1-based position of a chip among chips: the number keys and the tooltips.
+function chipOrdinal(filters, index) {
+  var at = chipIndexes(filters).indexOf(Number(index))
+  return at === -1 ? 0 : at + 1
+}
+
+function chipIndexForOrdinal(filters, ordinal) {
+  var chips = chipIndexes(filters)
+  var at = Number(ordinal) - 1
+  return at >= 0 && at < chips.length ? chips[at] : -1
+}
+
+// Tags read as +tag, the way Taskwarrior writes them.
+function tagLabel(tag) {
+  return tag === "" || tag === null || tag === undefined ? "No tag" : "+" + tag
+}
+
 // A new filter starts unconstrained.
 function draftFilter(name) {
   return {
@@ -254,6 +368,8 @@ function draftFilter(name) {
 // The fields the helper reads back. Its own `count` is never sent.
 function filterInput(filter) {
   filter = filter || {}
+  if (isDivider(filter)) return { break: true }
+  if (isFacet(filter)) return { facet: facetKind(filter) }
   var priority = String(filter.priority === undefined || filter.priority === null ? "" : filter.priority)
   return {
     name: String(filter.name === undefined || filter.name === null ? "" : filter.name),
@@ -276,6 +392,7 @@ function filtersJson(filters) {
 
 // "Month · btcmap · +next +personal · H only" for a chip tooltip.
 function filterSummary(filter) {
+  if (!isChip(filter)) return ""
   if (!filter) return ""
   var parts = []
   var time = filterTime(filter)
@@ -293,9 +410,10 @@ function filterSummary(filter) {
 }
 
 // Why the list is empty, in the filter's own terms.
-function emptyText(filter, project) {
+function emptyText(filter, project, tag) {
   var where = project !== "" && project !== null && project !== undefined ? " in " + project : ""
-  if (!filter) return "No pending tasks" + where + "."
+  if (tag !== "" && tag !== null && tag !== undefined) where += " tagged +" + tag
+  if (!filter || !isChip(filter)) return "No pending tasks" + where + "."
   var time = filterTime(filter)
   if (time === "due") return "Nothing overdue or due today" + where + "."
   if (time === "today") return "Nothing due through tomorrow" + where + "."

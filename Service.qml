@@ -29,6 +29,8 @@ Item {
   property var tasks: []
   property var counts: ({})
   property var projects: []
+  // Every tag on the listed tasks, most-used first: the tag line's chips.
+  property var tags: []
   /// The filters the plugin defined, sent to the helper with every snapshot.
   property var filters: []
   /// What the helper echoed back: name, window, selectors and count. This is
@@ -211,6 +213,7 @@ Item {
       root.tasks = data.tasks || []
       root.counts = data.counts || {}
       root.projects = data.projects || []
+      root.tags = data.tags || []
       // A helper older than the plugin returns no filters at all, and the
       // panel says so rather than showing an empty row of chips.
       root.filtersSupported = data.filters !== undefined

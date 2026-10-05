@@ -30,8 +30,23 @@ Panel {
   property int filterIndex: 0
   // Kept by name so a refresh, which sends a fresh list, cannot move it.
   property string chosenFilterName: ""
-  readonly property var filter: filters.length > 0 ? filters[Math.max(0, Math.min(filters.length - 1, filterIndex))] : null
+  readonly property var filter: {
+    if (filters.length === 0) return null
+    var at = Math.max(0, Math.min(filters.length - 1, filterIndex))
+    // A break or a generated line is not something the list can be showing.
+    if (!Model.isChip(filters[at])) {
+      var chips = Model.chipIndexes(filters)
+      if (chips.length === 0) return null
+      at = chips[0]
+    }
+    return filters[at]
+  }
+  // The entries grouped into lines: a break starts a new one, and a
+  // generated line sits inside the line it was placed on.
+  readonly property var filterLines: Model.entryLines(filters)
   property string project: ""
+  // The selected tag chip, narrowing the rows the same way the project does.
+  property string tag: ""
   property string cursorUuid: ""
   property string expandedUuid: ""
   property string editingUuid: ""
@@ -47,9 +62,10 @@ Panel {
       || filterSettings.anyFieldFocused))
 
   readonly property var allTasks: service ? service.tasks : []
-  readonly property var rows: Model.sortTasks(Model.tasksForFilter(allTasks, root.filterIndex, project), root.filter)
+  readonly property var rows: Model.sortTasks(Model.tasksForFilter(allTasks, root.filterIndex, project, tag), root.filter)
   readonly property var groups: Model.groupByProject(rows)
   readonly property var projects: service ? service.projects : []
+  readonly property var tags: service ? service.tags : []
   readonly property var counts: service ? service.counts : ({})
   readonly property bool showHeaders: project === "" && groups.length > 1
 
@@ -180,7 +196,9 @@ Panel {
 
   function setFilterIndex(index) {
     if (root.filters.length === 0) return
-    root.filterIndex = Math.max(0, Math.min(root.filters.length - 1, index))
+    index = Math.max(0, Math.min(root.filters.length - 1, index))
+    if (!Model.isChip(root.filters[index])) return
+    root.filterIndex = index
     root.chosenFilterName = root.filter ? String(root.filter.name) : ""
     root.expandedUuid = ""
     root.cursorUuid = ""
@@ -188,7 +206,7 @@ Panel {
 
   function cycleFilter(delta) {
     if (root.filters.length === 0) return
-    root.setFilterIndex(Model.cycleIndex(root.filters.length, root.filterIndex, delta))
+    root.setFilterIndex(Model.cycleChipIndex(root.filters, root.filterIndex, delta))
   }
 
   // The helper sends a fresh list on every refresh, so the chip is kept by
@@ -345,9 +363,10 @@ Panel {
         else if (t === "[") root.cycleProject(-1)
         else if (t === "]") root.cycleProject(1)
         else if (t >= "1" && t <= "9") {
-          // A digit picks a chip, and stops at the number of filters there are.
-          var at = parseInt(t, 10) - 1
-          if (at < root.filters.length) root.setFilterIndex(at)
+          // Digits count chips, so a break or a generated line in the list
+          // cannot shift which chip a number reaches.
+          var at = Model.chipIndexForOrdinal(root.filters, parseInt(t, 10))
+          if (at >= 0) root.setFilterIndex(at)
         }
       }
 
@@ -511,58 +530,102 @@ Panel {
             Keys.onPressed: function(event) { root.handleAddKey(event) }
           }
 
-          // ---- Filters. Whatever chips the helper was given, each with its
-          // own count; the gear edits them. A Flow, so a long set of chips
-          // wraps onto another line instead of running off the panel edge.
-          Flow {
+          // ---- Filters. Whatever entries the helper was given: chips with a
+          // window of their own, and generated lines of projects or tags. A
+          // break entry starts a new line, drawn with a hairline between them.
+          Column {
             visible: !root.settingsOpen
             width: parent.width
-            spacing: Style.space(4)
+            spacing: Style.space(5)
 
             Repeater {
-              model: root.filters
+              model: root.filterLines
 
-              Button {
+              Column {
+                id: filterLine
                 required property var modelData
                 required property int index
-                text: modelData.name
-                tooltipText: {
-                  var parts = [String(modelData.count) + (modelData.count === 1 ? " task" : " tasks")]
-                  if (index < 9) parts.push("(" + (index + 1) + ")")
-                  var summary = Model.filterSummary(modelData)
-                  if (summary !== "") parts.push(summary)
-                  return parts.join(" · ")
+                width: parent.width
+                spacing: Style.space(4)
+
+                // A hairline between the lines, never above the first.
+                Rectangle {
+                  visible: filterLine.index > 0
+                  width: parent.width
+                  height: 1
+                  color: root.foreground
+                  opacity: 0.15
                 }
-                selected: root.filterIndex === index
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.bodySmall
-                bordered: true
-                onClicked: root.setFilterIndex(index)
-              }
-            }
-          }
 
-          // ---- Project chips, only when there is more than one.
-          Flow {
-            width: parent.width
-            spacing: Style.space(4)
-            visible: !root.settingsOpen && root.projects.length > 1
+                Flow {
+                  width: parent.width
+                  spacing: Style.space(4)
 
-            Repeater {
-              model: root.projects
+                  Repeater {
+                    model: filterLine.modelData
 
-              Button {
-                required property var modelData
-                text: Model.projectLabel(modelData.name) + " " + modelData.pending
-                tooltipText: modelData.overdue > 0 ? modelData.overdue + " overdue" : "Only " + Model.projectLabel(modelData.name)
-                selected: root.project === modelData.name
-                foreground: modelData.overdue > 0 && root.project !== modelData.name ? root.urgent : root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(7)
-                verticalPadding: Style.space(3)
-                onClicked: root.setProject(modelData.name)
+                    Row {
+                      id: lineEntry
+                      required property var modelData
+                      readonly property var entry: root.filters[lineEntry.modelData]
+                      readonly property string kind: Model.facetKind(lineEntry.entry)
+                      spacing: Style.space(4)
+
+                      // A chip: a window of its own.
+                      Button {
+                        visible: Model.isChip(lineEntry.entry)
+                        readonly property int ordinal: Model.chipOrdinal(root.filters, lineEntry.modelData)
+                        text: String(lineEntry.entry.name === undefined ? "" : lineEntry.entry.name)
+                        tooltipText: {
+                          var parts = [String(lineEntry.entry.count) + (lineEntry.entry.count === 1 ? " task" : " tasks")]
+                          if (ordinal > 0 && ordinal < 10) parts.push("(" + ordinal + ")")
+                          var summary = Model.filterSummary(lineEntry.entry)
+                          if (summary !== "") parts.push(summary)
+                          return parts.join(" · ")
+                        }
+                        selected: root.filterIndex === lineEntry.modelData
+                        foreground: root.foreground
+                        fontFamily: root.fontFamily
+                        fontSize: Style.font.bodySmall
+                        bordered: true
+                        onClicked: root.setFilterIndex(lineEntry.modelData)
+                      }
+
+                      // A generated line: one chip per project, or per tag.
+                      // Selecting one takes rows away, like the project chips
+                      // always have.
+                      Flow {
+                        visible: Model.isFacet(lineEntry.entry)
+                        spacing: Style.space(4)
+
+                        Repeater {
+                          model: Model.facetItems(lineEntry.entry, root.projects, root.tags)
+
+                          Button {
+                            required property var modelData
+                            readonly property bool isTag: lineEntry.kind === "tags"
+                            readonly property string value: String(modelData.name === undefined ? "" : modelData.name)
+                            text: (isTag ? Model.tagLabel(value) : Model.projectLabel(value)) + " " + modelData.pending
+                            tooltipText: isTag
+                              ? (modelData.pending === 1 ? "1 task tagged " : modelData.pending + " tasks tagged ") + Model.tagLabel(value)
+                              : (modelData.overdue > 0 ? modelData.overdue + " overdue" : "Only " + Model.projectLabel(value))
+                            selected: isTag ? root.tag === value : root.project === value
+                            foreground: isTag ? root.foreground
+                              : (modelData.overdue > 0 && root.project !== value ? root.urgent : root.foreground)
+                            fontFamily: root.fontFamily
+                            fontSize: Style.font.caption
+                            horizontalPadding: Style.space(7)
+                            verticalPadding: Style.space(3)
+                            onClicked: {
+                              if (isTag) root.tag = root.tag === value ? "" : value
+                              else root.setProject(value)
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }

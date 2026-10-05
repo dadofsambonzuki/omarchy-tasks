@@ -190,3 +190,62 @@ test("links are checked before opening", () => {
 test("notification text is escaped", () => {
   assert.equal(M.escapeMarkup("a <b> & c"), "a &lt;b&gt; &amp; c")
 })
+
+
+test("entries: chips, breaks and generated lines", () => {
+  const filters = [
+    { name: "Due", time: "due" },
+    { break: true },
+    { facet: "projects" },
+    { name: "All", time: "all" },
+    { break: true },
+    { facet: "tags" },
+  ]
+  same(M.chipIndexes(filters), [0, 3], "only chips are selectable")
+  same(M.entryLines(filters), [[0], [2, 3], [5]], "a break starts a new line; empty lines are dropped")
+  assert.equal(M.isChip(filters[1]), false)
+  assert.equal(M.isDivider(filters[1]), true)
+  assert.equal(M.isFacet(filters[2]), true)
+  assert.equal(M.facetKind(filters[5]), "tags")
+  assert.equal(M.facetKind({ facet: "nonsense" }), "", "an unknown facet is not a generated line")
+  assert.equal(M.chipOrdinal(filters, 3), 2, "numbering counts chips only")
+  assert.equal(M.chipIndexForOrdinal(filters, 2), 3)
+  assert.equal(M.cycleChipIndex(filters, 0, 1), 3, "cycling steps over breaks and facets")
+  assert.equal(M.cycleChipIndex(filters, 3, 1), 0, "and wraps")
+  assert.equal(M.resolveFilterIndex(filters, "all", 0), 3, "resolving by name finds the chip, not the facet")
+  assert.equal(M.resolveFilterIndex(filters, "", 1), 0, "a fallback landing on a non-chip snaps to the first chip")
+  assert.equal(M.tagLabel("work"), "+work")
+})
+
+test("a generated line shows the projects or the tags", () => {
+  const projects = [{ name: "btcmap", pending: 3, overdue: 1 }]
+  const tags = [{ name: "work", pending: 2 }]
+  same(M.facetItems({ facet: "projects" }, projects, tags), projects)
+  same(M.facetItems({ facet: "tags" }, projects, tags), tags)
+  same(M.facetItems({ name: "All", time: "all" }, projects, tags), [], "a chip shows nothing of its own")
+  same(M.facetItems({ facet: "nonsense" }, projects, tags), [], "and neither does an unknown kind")
+})
+
+test("a break or facet round-trips to the helper and has no summary", () => {
+  same(M.filterInput({ break: true }), { break: true })
+  same(M.filterInput({ facet: "tags" }), { facet: "tags" })
+  same(M.filterInput(M.dividerEntry()), { break: true })
+  same(M.filterInput(M.facetEntry("tags")), { facet: "tags" })
+  same(M.facetEntry("nonsense"), { facet: "projects" }, "an unknown facet kind falls back to projects")
+  assert.equal(M.filterSummary({ facet: "projects" }), "")
+  assert.equal(M.filterSummary({ break: true }), "")
+})
+
+test("a tag narrows on top of the project and the chip", () => {
+  const tasks = [
+    { uuid: "a", description: "a", project: "btcmap", tags: ["btcmap", "work"], filters: [0] },
+    { uuid: "b", description: "b", project: "btcmap", tags: ["work"], filters: [0] },
+    { uuid: "c", description: "c", project: "home", tags: ["work"], filters: [0] },
+    { uuid: "d", description: "d", project: "btcmap", tags: ["work"], filters: [1] },
+  ]
+  same(M.tasksForFilter(tasks, 0).map(t => t.uuid), ["a", "b", "c"], "the chip alone")
+  same(M.tasksForFilter(tasks, 0, "btcmap").map(t => t.uuid), ["a", "b"], "project narrows")
+  same(M.tasksForFilter(tasks, 0, "btcmap", "work").map(t => t.uuid), ["a", "b"], "tag narrows further")
+  same(M.tasksForFilter(tasks, 0, "", "btcmap").map(t => t.uuid), ["a"], "a tag on its own")
+  same(M.tasksForFilter(tasks, 0, "home", "btcmap").map(t => t.uuid), [], "project and tag must both hold")
+})

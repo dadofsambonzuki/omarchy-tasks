@@ -121,6 +121,15 @@ pub struct ProjectCount {
     pub overdue: usize,
 }
 
+/// One tag on the listed pending tasks, for the plugin's tag line. Tags have
+/// no overdue notion of their own, so this is a name and a count.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagCount {
+    pub name: String,
+    pub pending: usize,
+}
+
 /// A named filter the panel shows a chip for and the bar can count.
 /// Input fields are clamped on the way in and echoed back normalised, so
 /// the plugin renders exactly what was applied rather than what it sent.
@@ -145,6 +154,10 @@ pub struct FilterOut {
     /// sent) and matches nothing at all.
     #[serde(rename = "break")]
     pub is_break: bool,
+    /// "projects" or "tags" for a generated line of chips the plugin builds
+    /// from the snapshot rather than from a window of its own. Empty for a
+    /// chip, and like a break it holds its position and matches nothing.
+    pub facet: String,
     /// Tasks in the snapshot this filter matches.
     pub count: usize,
 }
@@ -158,6 +171,8 @@ pub struct Snapshot {
     pub generated_ms: i64,
     pub counts: Counts,
     pub projects: Vec<ProjectCount>,
+    /// Every tag on the listed tasks, most-used first.
+    pub tags: Vec<TagCount>,
     pub filters: Vec<FilterOut>,
     pub tasks: Vec<TaskOut>,
 }
@@ -285,8 +300,9 @@ fn priority_rank(priority: &str) -> u8 {
 /// project, so `projects` is always any-of; `tags` is any-of unless the
 /// filter asks for all of them.
 pub fn filter_matches<Tz: TimeZone>(filter: &FilterOut, task: &TaskOut, now: &DateTime<Tz>) -> bool {
-    if filter.is_break {
-        // Its window is `all`, so without this a break would match every task.
+    if filter.is_break || !filter.facet.is_empty() {
+        // Both carry an `all` window, so without this they would match every
+        // task and starve the chips around them.
         return false;
     }
     if !in_window(task.due_ms, now, Window::parse(&filter.time)) {
@@ -351,6 +367,9 @@ struct FilterIn {
     /// `{"break": true}`: a line break in the list, not a chip.
     #[serde(default, rename = "break")]
     is_break: bool,
+    /// `{"facet": "projects"}` or `{"facet": "tags"}`: a generated line.
+    #[serde(default)]
+    facet: String,
 }
 
 fn clamp_values(values: &[String]) -> Vec<String> {
@@ -380,6 +399,22 @@ fn clamp_name(name: &str, index: usize) -> String {
 }
 
 fn normalise_filter(input: &FilterIn, index: usize) -> FilterOut {
+    let facet = match input.facet.trim().to_ascii_lowercase().as_str() {
+        "projects" => "projects",
+        "tags" => "tags",
+        _ => "",
+    };
+    if !facet.is_empty() {
+        // A generated line: the plugin builds its chips from the snapshot's
+        // projects or tags, so the entry itself carries no matching.
+        return FilterOut {
+            facet: facet.to_string(),
+            time: Window::All.as_str().to_string(),
+            match_mode: "any".to_string(),
+            priority_mode: "exact".to_string(),
+            ..FilterOut::default()
+        };
+    }
     if input.is_break {
         // No name, no window of its own, no projects or tags: a break must
         // never be mistaken for a chip, and `filter_matches` refuses it.
@@ -411,6 +446,7 @@ fn normalise_filter(input: &FilterIn, index: usize) -> FilterOut {
         }
         .to_string(),
         is_break: false,
+        facet: String::new(),
         count: 0,
     }
 }
@@ -425,7 +461,7 @@ pub fn parse_filters(json: &str) -> Vec<FilterOut> {
 /// What the plugin shows when it has no `filters` setting: the chips it has
 /// always offered, plus Month and Quarter.
 pub fn default_filters() -> Vec<FilterOut> {
-    ["Due", "Today", "Week", "Month", "Quarter", "All"]
+    let mut filters: Vec<FilterOut> = ["Due", "Today", "Week", "Month", "Quarter", "All"]
         .iter()
         .enumerate()
         .map(|(index, name)| FilterOut {
@@ -435,7 +471,19 @@ pub fn default_filters() -> Vec<FilterOut> {
             priority_mode: "exact".to_string(),
             ..normalise_filter(&FilterIn::default(), index)
         })
-        .collect()
+        .collect();
+    // The time chips get a line of their own, then a project line, then a tag
+    // line. Both generated lines are ordinary entries, so the plugin's
+    // settings can remove or move them like any other.
+    for facet in ["projects", "tags"] {
+        let at = filters.len();
+        filters.push(normalise_filter(&FilterIn { is_break: true, ..FilterIn::default() }, at));
+        filters.push(normalise_filter(
+            &FilterIn { facet: facet.to_string(), ..FilterIn::default() },
+            at + 1,
+        ));
+    }
+    filters
 }
 
 pub fn to_out<Tz: TimeZone>(raw: &RawTask, now: &DateTime<Tz>) -> TaskOut {
@@ -493,6 +541,7 @@ pub fn build_snapshot_filtered<Tz: TimeZone>(
     let mut counts = Counts::default();
     let mut tasks: Vec<TaskOut> = Vec::new();
     let mut projects: std::collections::BTreeMap<String, ProjectCount> = Default::default();
+    let mut tag_uses: std::collections::BTreeMap<String, usize> = Default::default();
 
     for raw in raw {
         match raw.status.as_str() {
@@ -522,6 +571,9 @@ pub fn build_snapshot_filtered<Tz: TimeZone>(
             entry.pending += 1;
             if out.bucket == Bucket::Overdue {
                 entry.overdue += 1;
+            }
+            for tag in &out.tags {
+                *tag_uses.entry(tag.clone()).or_insert(0) += 1;
             }
         }
         tasks.push(out);
@@ -560,6 +612,14 @@ pub fn build_snapshot_filtered<Tz: TimeZone>(
         filter.count = matched;
     }
 
+    // Most-used first, ties by name, so the tag line is stable between
+    // refreshes and the useful tags are the ones you can reach.
+    let mut tags: Vec<TagCount> = tag_uses
+        .into_iter()
+        .map(|(name, pending)| TagCount { name, pending })
+        .collect();
+    tags.sort_by(|a, b| b.pending.cmp(&a.pending).then_with(|| a.name.cmp(&b.name)));
+
     Snapshot {
         ok: true,
         available: true,
@@ -567,6 +627,7 @@ pub fn build_snapshot_filtered<Tz: TimeZone>(
         generated_ms: now.timestamp_millis(),
         counts,
         projects: projects.into_values().collect(),
+        tags,
         filters,
         tasks,
     }
@@ -823,6 +884,7 @@ mod tests {
             match_mode: "any".into(),
             priority_mode: "exact".into(),
             is_break: false,
+            facet: String::new(),
             count: 0,
         }
     }
@@ -980,9 +1042,57 @@ mod tests {
         // Nothing configured: the chips the plugin has always had, plus the two.
         let defaults = build_snapshot(&raw, &now(), false, "3.5.0");
         let names: Vec<&str> = defaults.filters.iter().map(|f| f.name.as_str()).collect();
-        assert_eq!(names, vec!["Due", "Today", "Week", "Month", "Quarter", "All"]);
+        assert_eq!(
+            names,
+            vec!["Due", "Today", "Week", "Month", "Quarter", "All", "", "", "", ""],
+            "the time chips, then a break and the projects line, then a break and the tags line"
+        );
         assert_eq!(defaults.filters[3].time, "month");
         assert_eq!(defaults.filters[5].count, 3, "All counts everything listed");
+        assert!(defaults.filters[6].is_break, "the chips get a line of their own");
+        assert_eq!(defaults.filters[7].facet, "projects");
+        assert!(defaults.filters[8].is_break);
+        assert_eq!(defaults.filters[9].facet, "tags");
+        assert_eq!(defaults.filters[7].count, 0, "a generated line counts nothing itself");
+    }
+
+    #[test]
+    fn tags_are_counted_most_used_first() {
+        let mut a = task("a", Some("20260927T040000Z"), "pending", Some("btcmap"), 12.0);
+        a.tags = vec!["btcmap".into(), "work".into()];
+        let mut b = task("b", None, "pending", None, 1.0);
+        b.tags = vec!["work".into()];
+        let mut d = task("d", Some("20261101T040000Z"), "waiting", Some("btcmap"), 3.0);
+        d.tags = vec!["ignored".into()];
+
+        let snap = build_snapshot(&vec![a, b, d], &now(), false, "3.5.0");
+        let names: Vec<&str> = snap.tags.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["work", "btcmap"], "most used first, ties by name");
+        assert_eq!(snap.tags[0].pending, 2);
+        assert_eq!(snap.tags[1].pending, 1);
+        assert!(!names.contains(&"ignored"), "a waiting task is not listed, so neither are its tags");
+    }
+
+    #[test]
+    fn a_facet_entry_holds_its_position_and_matches_nothing() {
+        let parsed = parse_filters(r#"[{"name":"All","time":"all"},{"facet":"projects"},{"facet":"nonsense"}]"#);
+        assert_eq!(parsed[1].facet, "projects");
+        assert_eq!(parsed[2].facet, "", "an unknown facet is not a generated line");
+
+        let raw = vec![task("a", None, "pending", None, 1.0), task("b", None, "pending", None, 2.0)];
+        let filters = vec![
+            filter("All", "all", &[], &[], ""),
+            FilterOut {
+                facet: "projects".to_string(),
+                time: "all".to_string(),
+                match_mode: "any".to_string(),
+                priority_mode: "exact".to_string(),
+                ..FilterOut::default()
+            },
+        ];
+        let snap = build_snapshot_filtered(&raw, &now(), false, "3.5.0", &filters);
+        assert_eq!(snap.filters[1].count, 0, "a generated line counts nothing itself");
+        assert!(snap.tasks.iter().all(|t| !t.filters.contains(&1)), "no task is in a facet entry");
     }
 
     #[test]
